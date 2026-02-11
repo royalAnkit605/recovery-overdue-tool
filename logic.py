@@ -5,10 +5,10 @@ from datetime import datetime
 
 def calculate_party_overdue(df, today_date=None):
     """
-    Hybrid logic:
-    - Strict FIFO for positive overdue (standard, accurate for collection)
-    - If FIFO overdue is 0 but outstanding is negative → set overdue = outstanding (captures large negatives)
-    - Allows negative overdue for overpaid parties
+    Calculates party-wise outstanding & overdue using FIFO.
+    - Uses MAX Credit Days per party
+    - Allows negative overdue
+    - Skips 'G Total' or any non-party rows
     """
     if today_date is None:
         today_date = datetime.now().date()
@@ -26,6 +26,9 @@ def calculate_party_overdue(df, today_date=None):
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     df = df[df['Customer Name'].notna()].copy()
+
+    # Skip non-party rows like 'G Total'
+    df = df[~df['Customer Name'].str.contains('G Total', na=False, case=False)]
 
     invoice_date_col = 'Invoice Date'
     df[invoice_date_col] = pd.to_datetime(df[invoice_date_col], errors='coerce')
@@ -74,11 +77,7 @@ def calculate_party_overdue(df, today_date=None):
                 remaining_ded -= val
             else:
                 unpaid = val - remaining_ded
-                unpaid_portions.append({
-                    'unpaid': unpaid,
-                    'days': row['Days'],
-                    'credit': credit_days
-                })
+                unpaid_portions.append({'unpaid': unpaid, 'days': row['Days'], 'credit': credit_days})
                 remaining_ded = 0
                 break
 
@@ -88,12 +87,7 @@ def calculate_party_overdue(df, today_date=None):
             for _, row in remaining.iterrows():
                 unpaid_portions.append({'unpaid': row['Order Value'], 'days': row['Days'], 'credit': credit_days})
 
-        overdue_fifo = sum(p['unpaid'] for p in unpaid_portions if p['days'] > p['credit'])
-
-        # Hybrid: if FIFO overdue is 0 but outstanding is negative → capture as negative overdue
-        overdue = overdue_fifo
-        if overdue_fifo >= 0 and outstanding < 0:
-            overdue = outstanding  # capture overpayment as negative overdue
+        overdue = sum(p['unpaid'] for p in unpaid_portions if p['days'] > p['credit'])
 
         results[party] = {
             'credit_days': credit_days,
