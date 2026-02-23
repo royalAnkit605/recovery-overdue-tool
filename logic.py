@@ -1,33 +1,36 @@
-# logic.py
 import pandas as pd
 from datetime import datetime
 
 
 def calculate_party_overdue(df, today_date=None):
     """
-    Calculates party-wise outstanding & overdue using FIFO.
-    - Uses MAX Credit Days per party
-    - Allows negative overdue
-    - Skips 'G Total' or any non-party rows
+    Calculates party-wise outstanding & overdue using FIFO allocation.
+    - Overdue is now calculated for invoices where Days >= 40 (fixed condition)
+    - Uses MAX Credit Days only for display/reference (not for overdue filter)
+    - Allows negative overdue (excess deductions on overdue invoices)
+    - Includes all parties with at least one invoice row
+    - Skips summary rows like 'G Total'
     """
     if today_date is None:
         today_date = datetime.now().date()
     else:
         today_date = pd.to_datetime(today_date).date()
 
+    # Required columns check
     required = ['Customer Name', 'Invoice Date', 'Order Value', 'Amount Received',
                 'Freight Adjustment', 'Credit Note', 'Credit Days', 'Description']
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f"Missing columns: {', '.join(missing)}")
 
+    # Clean numerics
     numeric_cols = ['Order Value', 'Amount Received', 'Freight Adjustment', 'Credit Note', 'Credit Days']
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     df = df[df['Customer Name'].notna()].copy()
 
-    # Skip non-party rows like 'G Total'
+    # Skip summary rows like 'G Total'
     df = df[~df['Customer Name'].str.contains('G Total', na=False, case=False)]
 
     invoice_date_col = 'Invoice Date'
@@ -63,6 +66,7 @@ def calculate_party_overdue(df, today_date=None):
             lambda d: (today_date - d.date()).days if pd.notna(d) else 9999
         )
 
+        # We still calculate credit_days for reference/display
         credit_series = df_inv['Credit Days'].replace(0, pd.NA).dropna()
         credit_days = int(credit_series.max()) if not credit_series.empty else 40
 
@@ -77,7 +81,11 @@ def calculate_party_overdue(df, today_date=None):
                 remaining_ded -= val
             else:
                 unpaid = val - remaining_ded
-                unpaid_portions.append({'unpaid': unpaid, 'days': row['Days'], 'credit': credit_days})
+                unpaid_portions.append({
+                    'unpaid': unpaid,
+                    'days': row['Days'],
+                    'credit': credit_days
+                })
                 remaining_ded = 0
                 break
 
@@ -85,14 +93,19 @@ def calculate_party_overdue(df, today_date=None):
         if current_pos < len(df_inv) - 1:
             remaining = df_inv.iloc[current_pos + 1:]
             for _, row in remaining.iterrows():
-                unpaid_portions.append({'unpaid': row['Order Value'], 'days': row['Days'], 'credit': credit_days})
+                unpaid_portions.append({
+                    'unpaid': row['Order Value'],
+                    'days': row['Days'],
+                    'credit': credit_days
+                })
 
-        overdue = sum(p['unpaid'] for p in unpaid_portions if p['days'] > p['credit'])
+        # Changed condition: overdue only if Days >= 40 (fixed, not using credit_days)
+        overdue = sum(p['unpaid'] for p in unpaid_portions if p['days'] >= 40)
 
         results[party] = {
-            'credit_days': credit_days,
+            'credit_days': credit_days,          # still kept for reference/display
             'outstanding': round(outstanding, 2),
-            'overdue': overdue
+            'overdue': overdue                   # now based on >= 40 days
         }
 
     results_40 = {p: v for p, v in results.items() if v['credit_days'] == 40}
