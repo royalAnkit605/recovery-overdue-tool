@@ -5,10 +5,10 @@ from datetime import datetime
 def calculate_party_overdue(df, today_date=None):
     """
     Calculates party-wise outstanding & overdue using FIFO allocation.
-    - Overdue is now calculated for invoices where Days >= 40 (fixed condition)
-    - Uses MAX Credit Days only for display/reference (not for overdue filter)
+    - For 40-day credit parties: overdue if Days >= 40
+    - For 60-day credit parties: overdue if Days >= 60
+    - Uses MAX Credit Days per party for grouping
     - Allows negative overdue (excess deductions on overdue invoices)
-    - Includes all parties with at least one invoice row
     - Skips summary rows like 'G Total'
     """
     if today_date is None:
@@ -66,7 +66,6 @@ def calculate_party_overdue(df, today_date=None):
             lambda d: (today_date - d.date()).days if pd.notna(d) else 9999
         )
 
-        # We still calculate credit_days for reference/display
         credit_series = df_inv['Credit Days'].replace(0, pd.NA).dropna()
         credit_days = int(credit_series.max()) if not credit_series.empty else 40
 
@@ -99,13 +98,16 @@ def calculate_party_overdue(df, today_date=None):
                     'credit': credit_days
                 })
 
-        # Changed condition: overdue only if Days >= 40 (fixed, not using credit_days)
-        overdue = sum(p['unpaid'] for p in unpaid_portions if p['days'] >= 40)
+        # Apply different overdue threshold based on party's credit_days
+        if credit_days == 60:
+            overdue = sum(p['unpaid'] for p in unpaid_portions if p['days'] >= 60)
+        else:
+            overdue = sum(p['unpaid'] for p in unpaid_portions if p['days'] >= 40)
 
         results[party] = {
-            'credit_days': credit_days,          # still kept for reference/display
+            'credit_days': credit_days,
             'outstanding': round(outstanding, 2),
-            'overdue': overdue                   # now based on >= 40 days
+            'overdue': overdue  # can be negative
         }
 
     results_40 = {p: v for p, v in results.items() if v['credit_days'] == 40}
